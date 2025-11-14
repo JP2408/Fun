@@ -1,1 +1,143 @@
-hello
+Option Explicit
+
+Sub ProcessCsv_And_TextJoin()
+    Dim fd As FileDialog
+    Dim filePath As String
+    Dim wb As Workbook
+    Dim wsSrc As Worksheet
+    Dim wsNew As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim lo As ListObject
+    
+    Dim lastRowNew As Long
+    Dim lastCol As Long
+    Dim startCol As Long
+    Dim dataStartRow As Long
+    Dim dataEndRow As Long
+    Dim totalDataRows As Long
+    Dim blockSize As Long
+    Dim blockCount As Long
+    Dim blockIndex As Long
+    Dim blockStartRow As Long
+    Dim blockEndRow As Long
+    Dim outRow As Long
+    Dim formulaG As String
+    Dim formulaI As String
+    
+    On Error GoTo ErrHandler
+    
+    blockSize = 2000 ' max rows per TEXTJOIN
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    
+    '--- Pick CSV file ---
+    Set fd = Application.FileDialog(msoFileDialogFilePicker)
+    With fd
+        .Title = "Select CSV file"
+        .Filters.Clear
+        .Filters.Add "CSV Files", "*.csv"
+        .AllowMultiSelect = False
+        
+        If .Show <> -1 Then
+            MsgBox "No file selected.", vbExclamation
+            GoTo CleanExit
+        End If
+        
+        filePath = .SelectedItems(1)
+    End With
+    
+    '--- Open CSV ---
+    Set wb = Workbooks.Open(filePath)
+    Set wsSrc = wb.ActiveSheet ' CSV opens as a single sheet
+    
+    ' Assume headers in row 1
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "G").End(xlUp).Row
+    If lastRow < 2 Then
+        MsgBox "No data found in column G.", vbExclamation
+        GoTo CleanExit
+    End If
+    
+    '--- Remove rows with "N" in column P ---
+    For i = lastRow To 2 Step -1
+        If UCase$(Trim$(wsSrc.Cells(i, "P").Value)) = "N" Then
+            wsSrc.Rows(i).Delete
+        End If
+    Next i
+    
+    ' Re-evaluate lastRow after deletions
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "G").End(xlUp).Row
+    If lastRow < 2 Then
+        MsgBox "No data left after removing 'N' rows in column P.", vbExclamation
+        GoTo CleanExit
+    End If
+    
+    '--- Remove duplicates based on column G (column 7) ---
+    wsSrc.Range("A1").CurrentRegion.RemoveDuplicates Columns:=Array(7), Header:=xlYes
+    
+    '--- Copy cleaned data to a new sheet and make it a table ---
+    Set wsNew = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+    On Error Resume Next
+    wsNew.Name = "Cleaned_Data_" & Format(Now, "hhmmss")
+    On Error GoTo ErrHandler
+    
+    wsSrc.Range("A1").CurrentRegion.Copy Destination:=wsNew.Range("A1")
+    
+    Set lo = wsNew.ListObjects.Add(xlSrcRange, wsNew.Range("A1").CurrentRegion, , xlYes)
+    lo.Name = "ResultTable"
+    
+    '--- Work out data range on new sheet ---
+    lastRowNew = wsNew.Cells(wsNew.Rows.Count, "G").End(xlUp).Row
+    If lastRowNew < 2 Then
+        MsgBox "No data in new sheet after copy.", vbExclamation
+        GoTo CleanExit
+    End If
+    
+    dataStartRow = 2                  ' data starts after header
+    dataEndRow = lastRowNew
+    totalDataRows = dataEndRow - dataStartRow + 1
+    
+    '--- Decide where to place TEXTJOIN formulas ---
+    lastCol = wsNew.Cells(1, wsNew.Columns.Count).End(xlToLeft).Column
+    startCol = lastCol + 2            ' leave one blank column as buffer
+    
+    wsNew.Cells(1, startCol - 1).Value = "Block"
+    wsNew.Cells(1, startCol).Value = "TEXTJOIN_G"
+    wsNew.Cells(1, startCol + 1).Value = "TEXTJOIN_I"
+    
+    ' Number of blocks of 2000 rows (ceiling division)
+    blockCount = (totalDataRows + blockSize - 1) \ blockSize
+    
+    '--- Create TEXTJOIN formulas in blocks of 2000 rows ---
+    For blockIndex = 0 To blockCount - 1
+        blockStartRow = dataStartRow + blockIndex * blockSize
+        blockEndRow = blockStartRow + blockSize - 1
+        If blockEndRow > dataEndRow Then blockEndRow = dataEndRow
+        
+        outRow = 2 + blockIndex ' first output row is 2
+        
+        ' Label the block
+        wsNew.Cells(outRow, startCol - 1).Value = "Block " & (blockIndex + 1)
+        
+        ' Build TEXTJOIN formulas for column G and I
+        formulaG = "=TEXTJOIN(""<delim>"",TRUE,G" & blockStartRow & ":G" & blockEndRow & ")"
+        formulaI = "=TEXTJOIN(""<delim>"",TRUE,I" & blockStartRow & ":I" & blockEndRow & ")"
+        
+        ' Replace placeholder with actual delimiter ", "
+        formulaG = Replace(formulaG, "<delim>", ", ")
+        formulaI = Replace(formulaI, "<delim>", ", ")
+        
+        wsNew.Cells(outRow, startCol).Formula = formulaG
+        wsNew.Cells(outRow, startCol + 1).Formula = formulaI
+    Next blockIndex
+    
+CleanExit:
+    Application.ScreenUpdating = True
+    Application.EnableEvents = True
+    Exit Sub
+    
+ErrHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description, vbExclamation, "ProcessCsv_And_TextJoin"
+    Resume CleanExit
+End Sub
