@@ -24,6 +24,7 @@ Sub ProcessCsv_And_TextJoin()
     Dim outRow As Long
     Dim formulaG As String
     Dim formulaI As String
+    Dim valP As String
     
     On Error GoTo ErrHandler
     
@@ -52,21 +53,21 @@ Sub ProcessCsv_And_TextJoin()
     Set wb = Workbooks.Open(filePath)
     Set wsSrc = wb.ActiveSheet ' CSV opens as a single sheet
     
-    ' Assume headers in row 1
-    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "G").End(xlUp).Row
-    If lastRow < 2 Then
-        MsgBox "No data found in column G.", vbExclamation
-        GoTo CleanExit
+    '--- Remove rows with "N" in column P (robust) ---
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "P").End(xlUp).Row
+    If lastRow >= 2 Then
+        For i = lastRow To 2 Step -1
+            valP = CStr(wsSrc.Cells(i, "P").Value)
+            valP = Application.WorksheetFunction.Clean(valP)
+            valP = UCase$(Trim$(valP))
+            
+            If valP = "N" Then
+                wsSrc.Rows(i).Delete
+            End If
+        Next i
     End If
     
-    '--- Remove rows with "N" in column P ---
-    For i = lastRow To 2 Step -1
-        If UCase$(Trim$(wsSrc.Cells(i, "P").Value)) = "N" Then
-            wsSrc.Rows(i).Delete
-        End If
-    Next i
-    
-    ' Re-evaluate lastRow after deletions
+    ' Re-evaluate lastRow using column G now (for later checks)
     lastRow = wsSrc.Cells(wsSrc.Rows.Count, "G").End(xlUp).Row
     If lastRow < 2 Then
         MsgBox "No data left after removing 'N' rows in column P.", vbExclamation
