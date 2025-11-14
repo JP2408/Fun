@@ -1,0 +1,47 @@
+Option Explicit
+
+Sub ProcessCsv_And_TextJoin()
+    Dim fd As FileDialog
+    Dim filePath As String
+    
+    Dim wb As Workbook          ' CSV workbook
+    Dim wbMain As Workbook      ' Workbook containing this macro
+    Dim wsCaller As Worksheet   ' Sheet where macro was run
+    Dim wsSrc As Worksheet
+    Dim wsNew As Worksheet
+    Dim lo As ListObject
+    
+    Dim lastRow As Long
+    Dim lastRowNew As Long
+    Dim lastCol As Long
+    Dim startCol As Long
+    Dim dataStartRow As Long
+    Dim dataEndRow As Long
+    Dim totalDataRows As Long
+    Dim blockSize As Long
+    Dim blockCount As Long
+    Dim blockIndex As Long
+    Dim blockStartRow As Long
+    Dim blockEndRow As Long
+    Dim outRow As Long
+    Dim formulaG As String
+    Dim formulaI As String
+    Dim valP As String
+    
+    Dim lastColCaller As Long
+    Dim outStartColCaller As Long
+    Dim i As Long
+    
+    On Error GoTo ErrHandler
+    
+    blockSize = 2000 ' max rows per TEXTJOIN
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    
+    '--- Remember the workbook & sheet where macro is run ---
+    Set wbMain = ThisWorkbook
+    Set wsCaller = ActiveSheet
+    
+    '--- Pick CSV file ---
+    Set fd =
