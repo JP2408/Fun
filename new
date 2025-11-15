@@ -1,176 +1,63 @@
 Option Explicit
 
-Sub ProcessCsv_And_TextJoin()
-    Dim fd As FileDialog
-    Dim filePath As String
-    
-    Dim wb As Workbook          ' CSV workbook
-    Dim wbMain As Workbook      ' Workbook containing this macro
-    Dim wsCaller As Worksheet   ' Sheet where macro was run
+Sub Import_Deduped_Data_From_File()
+    Dim srcFilePath As String
+    Dim wbSrc As Workbook
     Dim wsSrc As Worksheet
-    Dim wsNew As Worksheet
-    Dim lo As ListObject
-    
+    Dim wbDest As Workbook
+    Dim wsDest As Worksheet
     Dim lastRow As Long
-    Dim lastRowNew As Long
-    Dim lastCol As Long
-    Dim startCol As Long
-    Dim dataStartRow As Long
-    Dim dataEndRow As Long
-    Dim totalDataRows As Long
-    Dim blockSize As Long
-    Dim blockCount As Long
-    Dim blockIndex As Long
-    Dim blockStartRow As Long
-    Dim blockEndRow As Long
-    Dim outRow As Long
-    Dim formulaG As String
-    Dim formulaI As String
-    Dim valP As String
     
-    Dim lastColCaller As Long
-    Dim outStartColCaller As Long
-    Dim i As Long
+    ' >>> CHANGE THIS TO YOUR SOURCE FILE FULL PATH <<<
+    ' Example: "C:\Users\YourName\Documents\SourceFile.xlsx"
+    srcFilePath = "C:\Path\To\Your\File.xlsx"
     
     On Error GoTo ErrHandler
-    
-    blockSize = 2000 ' max rows per TEXTJOIN
     
     Application.ScreenUpdating = False
     Application.EnableEvents = False
     
-    '--- Remember the workbook & sheet where macro is run ---
-    Set wbMain = ThisWorkbook
-    Set wsCaller = ActiveSheet
+    ' Destination is the workbook where this macro lives
+    Set wbDest = ThisWorkbook
+    Set wsDest = wbDest.ActiveSheet   ' or specify sheet: Set wsDest = wbDest.Sheets("Sheet1")
     
-    '--- Pick CSV file ---
-    Set fd = Application.FileDialog(msoFileDialogFilePicker)
-    With fd
-        .Title = "Select CSV file"
-        .Filters.Clear
-        .Filters.Add "CSV Files", "*.csv"
-        .AllowMultiSelect = False
-        
-        If .Show <> -1 Then
-            MsgBox "No file selected.", vbExclamation
-            GoTo CleanExit
-        End If
-        
-        filePath = .SelectedItems(1)
-    End With
+    ' Open source workbook
+    Set wbSrc = Workbooks.Open(Filename:=srcFilePath, ReadOnly:=True)
+    ' Use first sheet – change if needed
+    Set wsSrc = wbSrc.Worksheets(1)
     
-    '--- Open CSV ---
-    Set wb = Workbooks.Open(filePath)
-    Set wsSrc = wb.ActiveSheet ' CSV opens as a single sheet
-    
-    '--- Remove rows with "N" in column P (robust) ---
-    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "P").End(xlUp).Row
-    If lastRow >= 2 Then
-        For i = lastRow To 2 Step -1
-            valP = CStr(wsSrc.Cells(i, "P").Value)
-            valP = Application.WorksheetFunction.Clean(valP)
-            valP = UCase$(Trim$(valP))
-            
-            If valP = "N" Then
-                wsSrc.Rows(i).Delete
-            End If
-        Next i
-    End If
-    
-    ' Re-evaluate lastRow using column G now (for later checks)
-    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "G").End(xlUp).Row
+    ' Find last used row in source based on column A
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "A").End(xlUp).Row
     If lastRow < 2 Then
-        MsgBox "No data left after removing 'N' rows in column P.", vbExclamation
-        GoTo CleanExit
+        MsgBox "No data found in source file.", vbExclamation
+        GoTo Cleanup
     End If
     
-    '--- Remove duplicates based on column G (column 7) ---
-    wsSrc.Range("A1").CurrentRegion.RemoveDuplicates Columns:=Array(7), Header:=xlYes
-    
-    '--- Copy cleaned data to a new sheet in the CSV workbook and make it a table ---
-    Set wsNew = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
-    On Error Resume Next
-    wsNew.Name = "Cleaned_Data_" & Format(Now, "hhmmss")
-    On Error GoTo ErrHandler
-    
-    wsSrc.Range("A1").CurrentRegion.Copy Destination:=wsNew.Range("A1")
-    
-    Set lo = wsNew.ListObjects.Add(xlSrcRange, wsNew.Range("A1").CurrentRegion, , xlYes)
-    lo.Name = "ResultTable"
-    
-    '--- Work out data range on new sheet ---
-    lastRowNew = wsNew.Cells(wsNew.Rows.Count, "G").End(xlUp).Row
-    If lastRowNew < 2 Then
-        MsgBox "No data in new sheet after copy.", vbExclamation
-        GoTo CleanExit
-    End If
-    
-    dataStartRow = 2                  ' data starts after header
-    dataEndRow = lastRowNew
-    totalDataRows = dataEndRow - dataStartRow + 1
-    
-    '--- Decide where to place TEXTJOIN formulas in wsNew ---
-    lastCol = wsNew.Cells(1, wsNew.Columns.Count).End(xlToLeft).Column
-    startCol = lastCol + 2            ' leave one blank column as buffer
-    
-    wsNew.Cells(1, startCol - 1).Value = "Block"
-    wsNew.Cells(1, startCol).Value = "TEXTJOIN_G"
-    wsNew.Cells(1, startCol + 1).Value = "TEXTJOIN_I"
-    
-    ' Number of blocks of 2000 rows (ceiling division)
-    blockCount = (totalDataRows + blockSize - 1) \ blockSize
-    
-    '--- Decide where to paste VALUES back on caller sheet ---
-    With wsCaller
-        If Application.WorksheetFunction.CountA(.Rows(1)) = 0 Then
-            lastColCaller = 0
-        Else
-            lastColCaller = .Cells(1, .Columns.Count).End(xlToLeft).Column
-        End If
-        
-        outStartColCaller = lastColCaller + 1
-        
-        .Cells(1, outStartColCaller).Value = "Block"
-        .Cells(1, outStartColCaller + 1).Value = "TEXTJOIN_G"
-        .Cells(1, outStartColCaller + 2).Value = "TEXTJOIN_I"
+    ' Remove duplicates based on Column G (7th column)
+    ' Assumes FIRST ROW IS HEADER. If no header, change Header:=xlNo
+    With wsSrc.Range("A1:P" & lastRow)
+        .RemoveDuplicates Columns:=7, Header:=xlYes
     End With
     
-    '--- Create TEXTJOIN formulas (wsNew) and copy results as VALUES to wsCaller ---
-    For blockIndex = 0 To blockCount - 1
-        blockStartRow = dataStartRow + blockIndex * blockSize
-        blockEndRow = blockStartRow + blockSize - 1
-        If blockEndRow > dataEndRow Then blockEndRow = dataEndRow
-        
-        outRow = 2 + blockIndex ' first output row is 2
-        
-        ' Label the block in wsNew
-        wsNew.Cells(outRow, startCol - 1).Value = "Block " & (blockIndex + 1)
-        
-        ' Build TEXTJOIN formulas for column G and I on wsNew
-        formulaG = "=TEXTJOIN(""<delim>"",TRUE,G" & blockStartRow & ":G" & blockEndRow & ")"
-        formulaI = "=TEXTJOIN(""<delim>"",TRUE,I" & blockStartRow & ":I" & blockEndRow & ")"
-        
-        ' Replace placeholder with actual delimiter ", "
-        formulaG = Replace(formulaG, "<delim>", ", ")
-        formulaI = Replace(formulaI, "<delim>", ", ")
-        
-        wsNew.Cells(outRow, startCol).Formula = formulaG
-        wsNew.Cells(outRow, startCol + 1).Formula = formulaI
-        
-        ' Copy the TEXTJOIN results as VALUES to the caller sheet
-        With wsCaller
-            .Cells(outRow, outStartColCaller).Value = wsNew.Cells(outRow, startCol - 1).Value       ' Block label
-            .Cells(outRow, outStartColCaller + 1).Value = wsNew.Cells(outRow, startCol).Value       ' TEXTJOIN_G result
-            .Cells(outRow, outStartColCaller + 2).Value = wsNew.Cells(outRow, startCol + 1).Value   ' TEXTJOIN_I result
-        End With
-    Next blockIndex
+    ' Recalculate last row after deduplication
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "A").End(xlUp).Row
     
-CleanExit:
+    ' Clear destination A:P before pasting
+    wsDest.Range("A:P").ClearContents
+    
+    ' Copy A:P from source to destination
+    wsSrc.Range("A1:P" & lastRow).Copy Destination:=wsDest.Range("A1")
+    
+    MsgBox "Data imported and duplicates removed based on Column G.", vbInformation
+
+Cleanup:
+    On Error Resume Next
+    If Not wbSrc Is Nothing Then wbSrc.Close SaveChanges:=False
     Application.ScreenUpdating = True
     Application.EnableEvents = True
     Exit Sub
-    
+
 ErrHandler:
-    MsgBox "Error " & Err.Number & ": " & Err.Description, vbExclamation, "ProcessCsv_And_TextJoin"
-    Resume CleanExit
+    MsgBox "Error: " & Err.Number & " - " & Err.Description, vbCritical
+    Resume Cleanup
 End Sub
