@@ -25,40 +25,40 @@ Sub BuildFinalList()
     
     '--- Open source workbook
     Set srcWb = Workbooks.Open(Filename:=SRC_PATH & SRC_FILE)
-    Set srcWs = srcWb.Worksheets(1) '<<< change if needed, e.g. srcWb.Worksheets("SheetName")
+    Set srcWs = srcWb.Worksheets(1) '<<< change if needed
     
-    '--- Remove duplicates based on Column G (7th column) in A:P
+    '--- Remove duplicates based on Column G (7th column)
     lastRow = srcWs.Cells(srcWs.Rows.Count, "G").End(xlUp).Row
-    If lastRow < 2 Then GoTo AfterSourceProcessing ' no data beyond header
+    If lastRow < 2 Then GoTo AfterSourceProcessing
     
     With srcWs.Range("A1:P" & lastRow)
         .RemoveDuplicates Columns:=7, Header:=xlYes
     End With
     
-    'Recalculate last row after duplicate removal
     lastRow = srcWs.Cells(srcWs.Rows.Count, "G").End(xlUp).Row
     
 AfterSourceProcessing:
-    '--- Create new workbook and copy A:P
+    
+    '--- Create Final List workbook
     Set finalWb = Workbooks.Add(xlWBATWorksheet)
     Set finalWs = finalWb.Worksheets(1)
     finalWs.Name = "Final List"
     
+    '--- Copy A:P values
     If lastRow >= 1 Then
         srcWs.Range("A1:P" & lastRow).Copy
-        With finalWs.Range("A1")
-            .PasteSpecial xlPasteValues
-        End With
+        finalWs.Range("A1").PasteSpecial xlPasteValues
         Application.CutCopyMode = False
     End If
     
-    '--- Close source file without saving
+    '--- Close source workbook
     srcWb.Close SaveChanges:=False
     
-    '--- Filter Column P = "N" and delete those rows
+    '--- Filter column P = "N"
     With finalWs
         lastRowP = .Cells(.Rows.Count, "P").End(xlUp).Row
         If lastRowP >= 2 Then
+            
             .Range("A1:P" & lastRowP).AutoFilter Field:=16, Criteria1:="N"
             
             On Error Resume Next
@@ -67,33 +67,32 @@ AfterSourceProcessing:
             
             If Not rngVisible Is Nothing Then
                 rngVisible.EntireRow.Delete
-                Set rngVisible = Nothing
             End If
             
             .AutoFilterMode = False
         End If
     End With
     
-    '--- Recalculate lastRow after deletions
-    With finalWs
-        lastRow = .Cells(.Rows.Count, "G").End(xlUp).Row
-    End With
+    '--- Updated last row
+    lastRow = finalWs.Cells(finalWs.Rows.Count, "G").End(xlUp).Row
     
-    '--- Add Sheet2 for TEXTJOIN output
+    '--- Add TEXTJOIN sheet and rename it
     Set tjWs = finalWb.Worksheets.Add(After:=finalWs)
-    'Keep default name ("Sheet2") as requested
+    tjWs.Name = "CoPer List"
     
-    dataStartRow = 2 'assuming headers in row 1 in Final List
+    dataStartRow = 2 'data starts below headers
     
     If lastRow >= dataStartRow Then
+    
         '===== Column G joins =====
-        'Row 1: Column G-1 (first up to 2000 records)
+        'Row 1: Column G-1
         tjWs.Range("A1").Value = "Column G-1"
         firstChunkEnd = Application.WorksheetFunction.Min(lastRow, dataStartRow + 2000 - 1)
+        
         tjWs.Range("B1").Formula = _
             "=TEXTJOIN("","",TRUE,'Final List'!G" & dataStartRow & ":G" & firstChunkEnd & ")"
         
-        'Row 2: Column G-2 (remaining records, if any)
+        'Row 2: Column G-2 (only if more than 2000)
         If lastRow > firstChunkEnd Then
             tjWs.Range("A2").Value = "Column G-2"
             tjWs.Range("B2").Formula = _
@@ -101,26 +100,25 @@ AfterSourceProcessing:
         End If
         
         '===== Column I joins =====
-        'Row 3: Column I-1 (first up to 2000 records)
+        'Row 3: Column I-1
         tjWs.Range("A3").Value = "Column I-1"
         firstChunkEnd = Application.WorksheetFunction.Min(lastRow, dataStartRow + 2000 - 1)
+        
         tjWs.Range("B3").Formula = _
             "=TEXTJOIN("","",TRUE,'Final List'!I" & dataStartRow & ":I" & firstChunkEnd & ")"
         
-        'Row 4: Column I-2 (remaining records, if any)
+        'Row 4: Column I-2 (only if more than 2000)
         If lastRow > firstChunkEnd Then
             tjWs.Range("A4").Value = "Column I-2"
             tjWs.Range("B4").Formula = _
                 "=TEXTJOIN("","",TRUE,'Final List'!I" & (firstChunkEnd + 1) & ":I" & lastRow & ")"
         End If
         
-        'Convert formulas and labels to values
-        With tjWs.Range("A1:B4")
-            .Value = .Value
-        End With
+        'Convert formulas to values
+        tjWs.Range("A1:B4").Value = tjWs.Range("A1:B4").Value
     End If
     
-    '--- Save Final List workbook in same folder
+    '--- Save Final file
     savePath = SRC_PATH & RESULT_FILE
     finalWb.SaveAs Filename:=savePath, FileFormat:=xlOpenXMLWorkbook
     
