@@ -1,63 +1,132 @@
 Option Explicit
 
-Sub Import_Deduped_Data_From_File()
-    Dim srcFilePath As String
-    Dim wbSrc As Workbook
-    Dim wsSrc As Worksheet
-    Dim wbDest As Workbook
-    Dim wsDest As Worksheet
+Sub BuildFinalList()
+    Const SRC_PATH As String = "C:\Your\Folder\Path\"        '<<< CHANGE THIS
+    Const SRC_FILE As String = "YourSourceFile.xlsx"         '<<< CHANGE THIS
+    Const RESULT_FILE As String = "Final List.xlsx"
+    
+    Dim srcWb As Workbook
+    Dim srcWs As Worksheet
+    Dim finalWb As Workbook
+    Dim finalWs As Worksheet
+    Dim tjWs As Worksheet
+    
     Dim lastRow As Long
+    Dim lastRowP As Long
+    Dim dataStartRow As Long
+    Dim dataRowCount As Long
+    Dim chunkSize As Long
+    Dim chunkCount As Long
+    Dim i As Long
+    Dim firstRow As Long
+    Dim lastRowChunk As Long
+    Dim rngVisible As Range
+    Dim savePath As String
     
-    ' >>> CHANGE THIS TO YOUR SOURCE FILE FULL PATH <<<
-    ' Example: "C:\Users\YourName\Documents\SourceFile.xlsx"
-    srcFilePath = "C:\Path\To\Your\File.xlsx"
-    
-    On Error GoTo ErrHandler
+    On Error GoTo CleanFail
     
     Application.ScreenUpdating = False
-    Application.EnableEvents = False
+    Application.DisplayAlerts = False
     
-    ' Destination is the workbook where this macro lives
-    Set wbDest = ThisWorkbook
-    Set wsDest = wbDest.ActiveSheet   ' or specify sheet: Set wsDest = wbDest.Sheets("Sheet1")
+    '--- Open source workbook
+    Set srcWb = Workbooks.Open(Filename:=SRC_PATH & SRC_FILE)
+    Set srcWs = srcWb.Worksheets(1) '<<< change if needed (e.g. srcWb.Worksheets("SheetName"))
     
-    ' Open source workbook
-    Set wbSrc = Workbooks.Open(Filename:=srcFilePath, ReadOnly:=True)
-    ' Use first sheet – change if needed
-    Set wsSrc = wbSrc.Worksheets(1)
+    '--- Remove duplicates based on Column G (7th column) in A:P
+    lastRow = srcWs.Cells(srcWs.Rows.Count, "G").End(xlUp).Row
+    If lastRow < 2 Then GoTo AfterSourceProcessing 'no data
     
-    ' Find last used row in source based on column A
-    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "A").End(xlUp).Row
-    If lastRow < 2 Then
-        MsgBox "No data found in source file.", vbExclamation
-        GoTo Cleanup
-    End If
-    
-    ' Remove duplicates based on Column G (7th column)
-    ' Assumes FIRST ROW IS HEADER. If no header, change Header:=xlNo
-    With wsSrc.Range("A1:P" & lastRow)
+    With srcWs.Range("A1:P" & lastRow)
         .RemoveDuplicates Columns:=7, Header:=xlYes
     End With
     
-    ' Recalculate last row after deduplication
-    lastRow = wsSrc.Cells(wsSrc.Rows.Count, "A").End(xlUp).Row
+    'Recalculate last row after duplicate removal
+    lastRow = srcWs.Cells(srcWs.Rows.Count, "G").End(xlUp).Row
     
-    ' Clear destination A:P before pasting
-    wsDest.Range("A:P").ClearContents
+AfterSourceProcessing:
+    '--- Create new workbook and copy A:P
+    Set finalWb = Workbooks.Add(xlWBATWorksheet)
+    Set finalWs = finalWb.Worksheets(1)
+    finalWs.Name = "Final List"
     
-    ' Copy A:P from source to destination
-    wsSrc.Range("A1:P" & lastRow).Copy Destination:=wsDest.Range("A1")
+    If lastRow >= 1 Then
+        srcWs.Range("A1:P" & lastRow).Copy
+        With finalWs.Range("A1")
+            .PasteSpecial xlPasteValues
+        End With
+        Application.CutCopyMode = False
+    End If
     
-    MsgBox "Data imported and duplicates removed based on Column G.", vbInformation
-
-Cleanup:
-    On Error Resume Next
-    If Not wbSrc Is Nothing Then wbSrc.Close SaveChanges:=False
+    '--- Close source file without saving
+    srcWb.Close SaveChanges:=False
+    
+    '--- Filter Column P = "N" and delete those rows
+    With finalWs
+        lastRowP = .Cells(.Rows.Count, "P").End(xlUp).Row
+        If lastRowP >= 2 Then
+            .Range("A1:P" & lastRowP).AutoFilter Field:=16, Criteria1:="N"
+            
+            On Error Resume Next
+            Set rngVisible = .Range("A2:P" & lastRowP).SpecialCells(xlCellTypeVisible)
+            On Error GoTo 0
+            
+            If Not rngVisible Is Nothing Then
+                rngVisible.EntireRow.Delete
+                Set rngVisible = Nothing
+            End If
+            
+            .AutoFilterMode = False
+        End If
+    End With
+    
+    '--- Recalculate lastRow after deletions
+    With finalWs
+        lastRow = .Cells(.Rows.Count, "G").End(xlUp).Row
+    End With
+    
+    '--- Add Sheet2 for TEXTJOIN output
+    Set tjWs = finalWb.Worksheets.Add(After:=finalWs)
+    'Do NOT rename so it stays "Sheet2" as requested
+    
+    '--- TEXTJOIN on Column G (A column in Sheet2) and Column I (B column in Sheet2)
+    dataStartRow = 2 'assuming headers in row 1
+    If lastRow >= dataStartRow Then
+        dataRowCount = lastRow - dataStartRow + 1
+        chunkSize = 2000
+        
+        chunkCount = (dataRowCount + chunkSize - 1) \ chunkSize 'ceiling
+        
+        For i = 0 To chunkCount - 1
+            firstRow = dataStartRow + i * chunkSize
+            lastRowChunk = firstRow + chunkSize - 1
+            If lastRowChunk > lastRow Then lastRowChunk = lastRow
+            
+            ' Column G join in Sheet2!A
+            tjWs.Cells(i + 1, "A").Formula = _
+                "=TEXTJOIN("","",TRUE,'Final List'!G" & firstRow & ":G" & lastRowChunk & ")"
+            
+            ' Column I join in Sheet2!B
+            tjWs.Cells(i + 1, "B").Formula = _
+                "=TEXTJOIN("","",TRUE,'Final List'!I" & firstRow & ":I" & lastRowChunk & ")"
+        Next i
+        
+        'Convert formulas to values
+        With tjWs.Range("A1:B" & chunkCount)
+            .Value = .Value
+        End With
+    End If
+    
+    '--- Save Final List workbook in same folder
+    savePath = SRC_PATH & RESULT_FILE
+    finalWb.SaveAs Filename:=savePath, FileFormat:=xlOpenXMLWorkbook
+    
+CleanExit:
+    Application.DisplayAlerts = True
     Application.ScreenUpdating = True
-    Application.EnableEvents = True
     Exit Sub
-
-ErrHandler:
-    MsgBox "Error: " & Err.Number & " - " & Err.Description, vbCritical
-    Resume Cleanup
+    
+CleanFail:
+    'basic error cleanup
+    MsgBox "Error: " & Err.Number & " - " & Err.Description, vbCritical, "BuildFinalList"
+    Resume CleanExit
 End Sub
