@@ -1,128 +1,170 @@
 Option Explicit
 
-Sub BuildFinalList()
-    Const SRC_PATH As String = "C:\Your\Folder\Path\"        '<<< CHANGE THIS
-    Const SRC_FILE As String = "YourSourceFile.xlsx"         '<<< CHANGE THIS
+Sub Populate_Domicile_CoR_From_Generic()
+    Dim mainFilePath As Variant
+    Dim wbMain As Workbook
+    Dim wbGeneric As Workbook
+    Dim wsFinal As Worksheet
+    Dim wsGeneric As Worksheet
+    Dim folderPath As String
+    Dim lookupRange As Range
+    Dim lastRowMain As Long
+    Dim lastRowGen As Long
     
-    Dim srcWb As Workbook
-    Dim srcWs As Worksheet
-    Dim finalWb As Workbook
-    Dim finalWs As Worksheet
-    Dim tjWs As Worksheet
+    Dim COL_G As Long
+    Dim COL_I As Long
+    Dim colKey1 As Long, colDom1 As Long, colCor1 As Long
+    Dim colKey2 As Long, colDom2 As Long, colCor2 As Long
     
-    Dim lastRow As Long
-    Dim lastRowP As Long
-    Dim dataStartRow As Long
-    Dim savePath As String
-    Dim rngVisible As Range
-    Dim firstChunkEnd As Long
-    Dim dateSuffix As String
+    Dim i As Long
+    Dim keyVal As Variant
+    Dim res As Variant
     
-    On Error GoTo CleanFail
+    On Error GoTo ErrHandler
+    
+    '--- select the main XLSX file
+    mainFilePath = Application.GetOpenFilename( _
+                    FileFilter:="Excel Files (*.xlsx), *.xlsx", _
+                    Title:="Select the main Final List workbook")
+    If mainFilePath = False Then
+        MsgBox "No file selected. Macro cancelled.", vbInformation
+        Exit Sub
+    End If
     
     Application.ScreenUpdating = False
-    Application.DisplayAlerts = False
+    Application.EnableEvents = False
     
-    '--- Build date suffix for file name: MM_DD
-    dateSuffix = Format(Date, "mm_dd")
+    '--- open main workbook
+    Set wbMain = Workbooks.Open(CStr(mainFilePath))
+    folderPath = wbMain.Path & Application.PathSeparator
     
-    '--- Open source workbook
-    Set srcWb = Workbooks.Open(Filename:=SRC_PATH & SRC_FILE)
-    Set srcWs = srcWb.Worksheets(1) '<<< modify if needed
+    '--- open Generic workbook (hardcoded name in same folder)
+    '   Change "Generic.xlsx" here if the actual file name is different
+    Set wbGeneric = Workbooks.Open(folderPath & "Generic.xlsx")
     
-    '--- Remove duplicates based on Column G
-    lastRow = srcWs.Cells(srcWs.Rows.Count, "G").End(xlUp).Row
-    If lastRow < 2 Then GoTo AfterSourceProcessing
+    '--- get sheets
+    On Error Resume Next
+    Set wsFinal = wbMain.Worksheets("Final List")
+    On Error GoTo ErrHandler
     
-    With srcWs.Range("A1:P" & lastRow)
-        .RemoveDuplicates Columns:=7, Header:=xlYes
-    End With
-    
-    lastRow = srcWs.Cells(srcWs.Rows.Count, "G").End(xlUp).Row
-    
-AfterSourceProcessing:
-
-    '--- Create new Final List workbook
-    Set finalWb = Workbooks.Add(xlWBATWorksheet)
-    Set finalWs = finalWb.Worksheets(1)
-    finalWs.Name = "Final List"
-    
-    If lastRow >= 1 Then
-        srcWs.Range("A1:P" & lastRow).Copy
-        finalWs.Range("A1").PasteSpecial xlPasteValues
-        Application.CutCopyMode = False
+    If wsFinal Is Nothing Then
+        MsgBox "'Final List' sheet not found in main workbook.", vbCritical
+        GoTo Cleanup
     End If
     
-    '--- Close source file
-    srcWb.Close SaveChanges:=False
+    'Use the first sheet in Generic.xlsx (change if you have a specific sheet)
+    Set wsGeneric = wbGeneric.Worksheets(1)
     
-    '--- Filter Column P = "N"
-    With finalWs
-        lastRowP = .Cells(.Rows.Count, "P").End(xlUp).Row
-        
-        If lastRowP >= 2 Then
-            .Range("A1:P" & lastRowP).AutoFilter Field:=16, Criteria1:="N"
-            
-            On Error Resume Next
-            Set rngVisible = .Range("A2:P" & lastRowP).SpecialCells(xlCellTypeVisible)
-            On Error GoTo 0
-            
-            If Not rngVisible Is Nothing Then rngVisible.EntireRow.Delete
-            .AutoFilterMode = False
-        End If
-    End With
+    '--- define lookup range in Generic: columns A:H
+    lastRowGen = wsGeneric.Cells(wsGeneric.Rows.Count, "A").End(xlUp).Row
+    If lastRowGen < 2 Then
+        MsgBox "No data found in column A of Generic file.", vbCritical
+        GoTo Cleanup
+    End If
+    Set lookupRange = wsGeneric.Range("A1:H" & lastRowGen)
     
-    '--- Updated last row after deletion
-    lastRow = finalWs.Cells(finalWs.Rows.Count, "G").End(xlUp).Row
-    
-    '--- Create Sheet2 renamed as CoPer List
-    Set tjWs = finalWb.Worksheets.Add(After:=finalWs)
-    tjWs.Name = "CoPer List"
-    
-    dataStartRow = 2
-    
-    If lastRow >= dataStartRow Then
-    
-        '----- COLUMN G -----
-        tjWs.Range("A1").Value = "Column G-1"
-        firstChunkEnd = Application.WorksheetFunction.Min(lastRow, dataStartRow + 2000 - 1)
-        
-        tjWs.Range("B1").Formula = _
-            "=TEXTJOIN("","",TRUE,'Final List'!G" & dataStartRow & ":G" & firstChunkEnd & ")"
-        
-        If lastRow > firstChunkEnd Then
-            tjWs.Range("A2").Value = "Column G-2"
-            tjWs.Range("B2").Formula = _
-                "=TEXTJOIN("","",TRUE,'Final List'!G" & (firstChunkEnd + 1) & ":G" & lastRow & ")"
-        End If
-        
-        '----- COLUMN I -----
-        tjWs.Range("A3").Value = "Column I-1"
-        firstChunkEnd = Application.WorksheetFunction.Min(lastRow, dataStartRow + 2000 - 1)
-        
-        tjWs.Range("B3").Formula = _
-            "=TEXTJOIN("","",TRUE,'Final List'!I" & dataStartRow & ":I" & firstChunkEnd & ")"
-        
-        If lastRow > firstChunkEnd Then
-            tjWs.Range("A4").Value = "Column I-2"
-            tjWs.Range("B4").Formula = _
-                "=TEXTJOIN("","",TRUE,'Final List'!I" & (firstChunkEnd + 1) & ":I" & lastRow & ")"
-        End If
-        
-        tjWs.Range("A1:B4").Value = tjWs.Range("A1:B4").Value
+    '--- determine last row in Final List
+    lastRowMain = wsFinal.Cells(wsFinal.Rows.Count, "A").End(xlUp).Row
+    If lastRowMain < 2 Then
+        MsgBox "No data rows found in 'Final List' sheet.", vbCritical
+        GoTo Cleanup
     End If
     
-    '--- Save Final file with date suffix
-    savePath = SRC_PATH & "Final List - " & dateSuffix & ".xlsx"
+    '--- base column indexes (before inserting)
+    COL_G = 7          'Column G
+    COL_I = 9          'Column I
     
-    finalWb.SaveAs Filename:=savePath, FileFormat:=xlOpenXMLWorkbook
+    With wsFinal
+        '========================================================
+        ' 1) Insert 2 columns after original Column G
+        '========================================================
+        .Columns(COL_G + 1).Resize(, 2).Insert Shift:=xlToRight
+        
+        colKey1 = COL_G                     'key in original G
+        colDom1 = COL_G + 1                 'new column after G
+        colCor1 = COL_G + 2                 'next new column
+        
+        .Cells(1, colDom1).Value = "Domicile"
+        .Cells(1, colCor1).Value = "CoR"
+        
+        '========================================================
+        ' 2) Insert 2 columns after original Column I
+        '    (original I has shifted by 2 columns because of insert above)
+        '========================================================
+        colKey2 = COL_I + 2                 'original I now at COL_I + 2
+        
+        .Columns(colKey2 + 1).Resize(, 2).Insert Shift:=xlToRight
+        
+        colDom2 = colKey2 + 1
+        colCor2 = colKey2 + 2
+        
+        .Cells(1, colDom2).Value = "Domicile"
+        .Cells(1, colCor2).Value = "CoR"
+    End With
     
-CleanExit:
-    Application.DisplayAlerts = True
+    '--- fill values row by row using VLOOKUP logic
+    For i = 2 To lastRowMain
+        '-----------------------
+        ' Lookups based on Column G key (colKey1)
+        '-----------------------
+        keyVal = wsFinal.Cells(i, colKey1).Value
+        If Not IsEmpty(keyVal) Then
+            ' Domicile from Generic column H (8th column in lookup range)
+            res = Application.VLookup(keyVal, lookupRange, 8, False)
+            If Not IsError(res) Then
+                wsFinal.Cells(i, colDom1).Value = res
+            Else
+                wsFinal.Cells(i, colDom1).Value = ""
+            End If
+            
+            ' CoR from Generic column G (7th column in lookup range)
+            res = Application.VLookup(keyVal, lookupRange, 7, False)
+            If Not IsError(res) Then
+                wsFinal.Cells(i, colCor1).Value = res
+            Else
+                wsFinal.Cells(i, colCor1).Value = ""
+            End If
+        Else
+            wsFinal.Cells(i, colDom1).Value = ""
+            wsFinal.Cells(i, colCor1).Value = ""
+        End If
+        
+        '-----------------------
+        ' Lookups based on Column I key (colKey2)
+        '-----------------------
+        keyVal = wsFinal.Cells(i, colKey2).Value
+        If Not IsEmpty(keyVal) Then
+            ' Domicile from Generic column H
+            res = Application.VLookup(keyVal, lookupRange, 8, False)
+            If Not IsError(res) Then
+                wsFinal.Cells(i, colDom2).Value = res
+            Else
+                wsFinal.Cells(i, colDom2).Value = ""
+            End If
+            
+            ' CoR from Generic column G
+            res = Application.VLookup(keyVal, lookupRange, 7, False)
+            If Not IsError(res) Then
+                wsFinal.Cells(i, colCor2).Value = res
+            Else
+                wsFinal.Cells(i, colCor2).Value = ""
+            End If
+        Else
+            wsFinal.Cells(i, colDom2).Value = ""
+            wsFinal.Cells(i, colCor2).Value = ""
+        End If
+    Next i
+    
+    '--- save the main workbook
+    wbMain.Save
+    
+Cleanup:
+    On Error Resume Next
     Application.ScreenUpdating = True
+    Application.EnableEvents = True
     Exit Sub
     
-CleanFail:
-    MsgBox "Error: " & Err.Description, vbCritical, "BuildFinalList"
-    Resume CleanExit
+ErrHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description, vbCritical, "Populate_Domicile_CoR_From_Generic"
+    Resume Cleanup
 End Sub
