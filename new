@@ -3,7 +3,6 @@ Option Explicit
 Sub BuildFinalList()
     Const SRC_PATH As String = "C:\Your\Folder\Path\"        '<<< CHANGE THIS
     Const SRC_FILE As String = "YourSourceFile.xlsx"         '<<< CHANGE THIS
-    Const RESULT_FILE As String = "Final List.xlsx"
     
     Dim srcWb As Workbook
     Dim srcWs As Worksheet
@@ -17,17 +16,21 @@ Sub BuildFinalList()
     Dim savePath As String
     Dim rngVisible As Range
     Dim firstChunkEnd As Long
+    Dim dateSuffix As String
     
     On Error GoTo CleanFail
     
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
     
+    '--- Build date suffix for file name: MM_DD
+    dateSuffix = Format(Date, "mm_dd")
+    
     '--- Open source workbook
     Set srcWb = Workbooks.Open(Filename:=SRC_PATH & SRC_FILE)
-    Set srcWs = srcWb.Worksheets(1) '<<< change if needed
+    Set srcWs = srcWb.Worksheets(1) '<<< modify if needed
     
-    '--- Remove duplicates based on Column G (7th column)
+    '--- Remove duplicates based on Column G
     lastRow = srcWs.Cells(srcWs.Rows.Count, "G").End(xlUp).Row
     If lastRow < 2 Then GoTo AfterSourceProcessing
     
@@ -38,88 +41,80 @@ Sub BuildFinalList()
     lastRow = srcWs.Cells(srcWs.Rows.Count, "G").End(xlUp).Row
     
 AfterSourceProcessing:
-    
-    '--- Create Final List workbook
+
+    '--- Create new Final List workbook
     Set finalWb = Workbooks.Add(xlWBATWorksheet)
     Set finalWs = finalWb.Worksheets(1)
     finalWs.Name = "Final List"
     
-    '--- Copy A:P values
     If lastRow >= 1 Then
         srcWs.Range("A1:P" & lastRow).Copy
         finalWs.Range("A1").PasteSpecial xlPasteValues
         Application.CutCopyMode = False
     End If
     
-    '--- Close source workbook
+    '--- Close source file
     srcWb.Close SaveChanges:=False
     
-    '--- Filter column P = "N"
+    '--- Filter Column P = "N"
     With finalWs
         lastRowP = .Cells(.Rows.Count, "P").End(xlUp).Row
+        
         If lastRowP >= 2 Then
-            
             .Range("A1:P" & lastRowP).AutoFilter Field:=16, Criteria1:="N"
             
             On Error Resume Next
             Set rngVisible = .Range("A2:P" & lastRowP).SpecialCells(xlCellTypeVisible)
             On Error GoTo 0
             
-            If Not rngVisible Is Nothing Then
-                rngVisible.EntireRow.Delete
-            End If
-            
+            If Not rngVisible Is Nothing Then rngVisible.EntireRow.Delete
             .AutoFilterMode = False
         End If
     End With
     
-    '--- Updated last row
+    '--- Updated last row after deletion
     lastRow = finalWs.Cells(finalWs.Rows.Count, "G").End(xlUp).Row
     
-    '--- Add TEXTJOIN sheet and rename it
+    '--- Create Sheet2 renamed as CoPer List
     Set tjWs = finalWb.Worksheets.Add(After:=finalWs)
     tjWs.Name = "CoPer List"
     
-    dataStartRow = 2 'data starts below headers
+    dataStartRow = 2
     
     If lastRow >= dataStartRow Then
     
-        '===== Column G joins =====
-        'Row 1: Column G-1
+        '----- COLUMN G -----
         tjWs.Range("A1").Value = "Column G-1"
         firstChunkEnd = Application.WorksheetFunction.Min(lastRow, dataStartRow + 2000 - 1)
         
         tjWs.Range("B1").Formula = _
             "=TEXTJOIN("","",TRUE,'Final List'!G" & dataStartRow & ":G" & firstChunkEnd & ")"
         
-        'Row 2: Column G-2 (only if more than 2000)
         If lastRow > firstChunkEnd Then
             tjWs.Range("A2").Value = "Column G-2"
             tjWs.Range("B2").Formula = _
                 "=TEXTJOIN("","",TRUE,'Final List'!G" & (firstChunkEnd + 1) & ":G" & lastRow & ")"
         End If
         
-        '===== Column I joins =====
-        'Row 3: Column I-1
+        '----- COLUMN I -----
         tjWs.Range("A3").Value = "Column I-1"
         firstChunkEnd = Application.WorksheetFunction.Min(lastRow, dataStartRow + 2000 - 1)
         
         tjWs.Range("B3").Formula = _
             "=TEXTJOIN("","",TRUE,'Final List'!I" & dataStartRow & ":I" & firstChunkEnd & ")"
         
-        'Row 4: Column I-2 (only if more than 2000)
         If lastRow > firstChunkEnd Then
             tjWs.Range("A4").Value = "Column I-2"
             tjWs.Range("B4").Formula = _
                 "=TEXTJOIN("","",TRUE,'Final List'!I" & (firstChunkEnd + 1) & ":I" & lastRow & ")"
         End If
         
-        'Convert formulas to values
         tjWs.Range("A1:B4").Value = tjWs.Range("A1:B4").Value
     End If
     
-    '--- Save Final file
-    savePath = SRC_PATH & RESULT_FILE
+    '--- Save Final file with date suffix
+    savePath = SRC_PATH & "Final List - " & dateSuffix & ".xlsx"
+    
     finalWb.SaveAs Filename:=savePath, FileFormat:=xlOpenXMLWorkbook
     
 CleanExit:
@@ -128,6 +123,6 @@ CleanExit:
     Exit Sub
     
 CleanFail:
-    MsgBox "Error: " & Err.Number & " - " & Err.Description, vbCritical, "BuildFinalList"
+    MsgBox "Error: " & Err.Description, vbCritical, "BuildFinalList"
     Resume CleanExit
 End Sub
