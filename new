@@ -14,14 +14,9 @@ Sub BuildFinalList()
     Dim lastRow As Long
     Dim lastRowP As Long
     Dim dataStartRow As Long
-    Dim dataRowCount As Long
-    Dim chunkSize As Long
-    Dim chunkCount As Long
-    Dim i As Long
-    Dim firstRow As Long
-    Dim lastRowChunk As Long
-    Dim rngVisible As Range
     Dim savePath As String
+    Dim rngVisible As Range
+    Dim firstChunkEnd As Long
     
     On Error GoTo CleanFail
     
@@ -30,11 +25,11 @@ Sub BuildFinalList()
     
     '--- Open source workbook
     Set srcWb = Workbooks.Open(Filename:=SRC_PATH & SRC_FILE)
-    Set srcWs = srcWb.Worksheets(1) '<<< change if needed (e.g. srcWb.Worksheets("SheetName"))
+    Set srcWs = srcWb.Worksheets(1) '<<< change if needed, e.g. srcWb.Worksheets("SheetName")
     
     '--- Remove duplicates based on Column G (7th column) in A:P
     lastRow = srcWs.Cells(srcWs.Rows.Count, "G").End(xlUp).Row
-    If lastRow < 2 Then GoTo AfterSourceProcessing 'no data
+    If lastRow < 2 Then GoTo AfterSourceProcessing ' no data beyond header
     
     With srcWs.Range("A1:P" & lastRow)
         .RemoveDuplicates Columns:=7, Header:=xlYes
@@ -86,32 +81,41 @@ AfterSourceProcessing:
     
     '--- Add Sheet2 for TEXTJOIN output
     Set tjWs = finalWb.Worksheets.Add(After:=finalWs)
-    'Do NOT rename so it stays "Sheet2" as requested
+    'Keep default name ("Sheet2") as requested
     
-    '--- TEXTJOIN on Column G (A column in Sheet2) and Column I (B column in Sheet2)
-    dataStartRow = 2 'assuming headers in row 1
+    dataStartRow = 2 'assuming headers in row 1 in Final List
+    
     If lastRow >= dataStartRow Then
-        dataRowCount = lastRow - dataStartRow + 1
-        chunkSize = 2000
+        '===== Column G joins =====
+        'Row 1: Column G-1 (first up to 2000 records)
+        tjWs.Range("A1").Value = "Column G-1"
+        firstChunkEnd = Application.WorksheetFunction.Min(lastRow, dataStartRow + 2000 - 1)
+        tjWs.Range("B1").Formula = _
+            "=TEXTJOIN("","",TRUE,'Final List'!G" & dataStartRow & ":G" & firstChunkEnd & ")"
         
-        chunkCount = (dataRowCount + chunkSize - 1) \ chunkSize 'ceiling
+        'Row 2: Column G-2 (remaining records, if any)
+        If lastRow > firstChunkEnd Then
+            tjWs.Range("A2").Value = "Column G-2"
+            tjWs.Range("B2").Formula = _
+                "=TEXTJOIN("","",TRUE,'Final List'!G" & (firstChunkEnd + 1) & ":G" & lastRow & ")"
+        End If
         
-        For i = 0 To chunkCount - 1
-            firstRow = dataStartRow + i * chunkSize
-            lastRowChunk = firstRow + chunkSize - 1
-            If lastRowChunk > lastRow Then lastRowChunk = lastRow
-            
-            ' Column G join in Sheet2!A
-            tjWs.Cells(i + 1, "A").Formula = _
-                "=TEXTJOIN("","",TRUE,'Final List'!G" & firstRow & ":G" & lastRowChunk & ")"
-            
-            ' Column I join in Sheet2!B
-            tjWs.Cells(i + 1, "B").Formula = _
-                "=TEXTJOIN("","",TRUE,'Final List'!I" & firstRow & ":I" & lastRowChunk & ")"
-        Next i
+        '===== Column I joins =====
+        'Row 3: Column I-1 (first up to 2000 records)
+        tjWs.Range("A3").Value = "Column I-1"
+        firstChunkEnd = Application.WorksheetFunction.Min(lastRow, dataStartRow + 2000 - 1)
+        tjWs.Range("B3").Formula = _
+            "=TEXTJOIN("","",TRUE,'Final List'!I" & dataStartRow & ":I" & firstChunkEnd & ")"
         
-        'Convert formulas to values
-        With tjWs.Range("A1:B" & chunkCount)
+        'Row 4: Column I-2 (remaining records, if any)
+        If lastRow > firstChunkEnd Then
+            tjWs.Range("A4").Value = "Column I-2"
+            tjWs.Range("B4").Formula = _
+                "=TEXTJOIN("","",TRUE,'Final List'!I" & (firstChunkEnd + 1) & ":I" & lastRow & ")"
+        End If
+        
+        'Convert formulas and labels to values
+        With tjWs.Range("A1:B4")
             .Value = .Value
         End With
     End If
@@ -126,7 +130,6 @@ CleanExit:
     Exit Sub
     
 CleanFail:
-    'basic error cleanup
     MsgBox "Error: " & Err.Number & " - " & Err.Description, vbCritical, "BuildFinalList"
     Resume CleanExit
 End Sub
