@@ -1,4 +1,4 @@
-Sub Extract_Matched_and_Blanks()
+Sub Extract_Matched_And_Blanks_ColI_ColM()
 
     Dim wbMain As Workbook           ' File you select
     Dim wbLookup As Workbook         ' Hardcoded file
@@ -7,23 +7,25 @@ Sub Extract_Matched_and_Blanks()
     Dim wsOut As Worksheet
     Dim fDialog As FileDialog
     Dim lookupPath As String
-    Dim lastRow As Long
-    Dim critRange As Range
-    Dim rngA As Range
+    Dim lastRowMain As Long, lastRowLookup As Long
+    Dim rngLookup As Range, rngData As Range
     Dim newSheetName As String
     Dim tbl As ListObject
-    
+    Dim visRange As Range
+    Dim i As Long
+    Dim vI As Variant, vM As Variant
+
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
 
     '----------------------------------------------------------
-    ' UPDATE THIS PATH FOR THE LOOKUP FILE
+    ' UPDATE THIS PATH TO YOUR 2ND (HARDCODED) FILE
     '----------------------------------------------------------
     lookupPath = "D:\YourFolder\LookupFile.xlsx"
     '----------------------------------------------------------
 
     '-----------------------------
-    ' Select MAIN file
+    ' Select MAIN file (1st file)
     '-----------------------------
     Set fDialog = Application.FileDialog(msoFileDialogFilePicker)
     With fDialog
@@ -31,62 +33,83 @@ Sub Extract_Matched_and_Blanks()
         .AllowMultiSelect = False
         If .Show <> -1 Then
             MsgBox "No file selected.", vbExclamation
-            Exit Sub
+            GoTo CleanupExit
         End If
     End With
 
     Set wbMain = Workbooks.Open(fDialog.SelectedItems(1))
     Set wbLookup = Workbooks.Open(lookupPath)
 
+    ' Main sheet = "Final List"
+    On Error Resume Next
     Set wsMain = wbMain.Sheets("Final List")
-    Set wsLookup = wbLookup.Sheets(1)         ' First sheet of lookup file
-    
-    ' Lookup criteria = column A of second file
-    lastRow = wsLookup.Cells(wsLookup.Rows.Count, "A").End(xlDown).Row
-    Set rngA = wsLookup.Range("A1:A" & lastRow)
+    On Error GoTo 0
+    If wsMain Is Nothing Then
+        MsgBox "'Final List' sheet not found in main file.", vbCritical
+        GoTo CleanupExit
+    End If
+
+    ' Lookup sheet = first sheet in 2nd file (adjust if needed)
+    Set wsLookup = wbLookup.Sheets(1)
+
+    ' Lookup range = Column A of 2nd file (ignoring header in A1)
+    lastRowLookup = wsLookup.Cells(wsLookup.Rows.Count, "A").End(xlUp).Row
+    If lastRowLookup < 2 Then
+        MsgBox "No lookup data found in column A of 2nd file.", vbExclamation
+        GoTo CleanupExit
+    End If
+    Set rngLookup = wsLookup.Range("A2:A" & lastRowLookup)
 
     '-----------------------------
-    ' Add a helper column for OR match
+    ' Helper column U in main file
     '-----------------------------
-    wsMain.Columns("Z").ClearContents
-    wsMain.Range("Z1").Value = "MatchCheck"
+    wsMain.Columns("U").ClearContents
+    wsMain.Range("U1").Value = "IncludeRow"
 
-    Dim i As Long, vI As Variant, vM As Variant
-    For i = 2 To wsMain.Cells(wsMain.Rows.Count, "I").End(xlUp).Row
+    lastRowMain = wsMain.Cells(wsMain.Rows.Count, "A").End(xlUp).Row
+    If lastRowMain < 2 Then
+        MsgBox "No data rows found in 'Final List' sheet.", vbExclamation
+        GoTo CleanupExit
+    End If
+
+    ' Flag rows to keep based on:
+    '  (I in lookup) OR (M in lookup) OR (I blank) OR (M blank)
+    For i = 2 To lastRowMain
         vI = wsMain.Cells(i, "I").Value
         vM = wsMain.Cells(i, "M").Value
 
-        If Application.WorksheetFunction.CountIf(rngA, vI) > 0 _
-        Or Application.WorksheetFunction.CountIf(rngA, vM) > 0 Then
-            wsMain.Cells(i, "Z").Value = "MATCH"
-        Else
-            wsMain.Cells(i, "Z").Value = ""
+        If _
+            (Len(vI) = 0) Or _
+            (Len(vM) = 0) Or _
+            (Application.CountIf(rngLookup, vI) > 0) Or _
+            (Application.CountIf(rngLookup, vM) > 0) _
+        Then
+            wsMain.Cells(i, "U").Value = "Y"
         End If
     Next i
 
     '-----------------------------
-    ' Apply filter:
-    ' (1) Z = MATCH     OR
-    ' (2) Column I blank OR Column N blank
+    ' Apply filter on helper column U
     '-----------------------------
     wsMain.AutoFilterMode = False
+    Set rngData = wsMain.Range("A1:U" & lastRowMain)
 
-    wsMain.Range("A1:Z" & wsMain.Cells(wsMain.Rows.Count, "A").End(xlUp).Row).AutoFilter _
-        Field:=26, Criteria1:="MATCH"    ' Z column
-
-    wsMain.Range("A1:Z" & wsMain.Cells(wsMain.Rows.Count, "A").End(xlUp).Row).AutoFilter _
-        Field:=9, Criteria1:="="         ' Col I blank
-
-    wsMain.Range("A1:Z" & wsMain.Cells(wsMain.Rows.Count, "A").End(xlUp).Row).AutoFilter _
-        Field:=14, Criteria1:="="        ' Col N blank
+    rngData.AutoFilter Field:=21, Criteria1:="Y"   ' Column U = IncludeRow
 
     '-----------------------------
-    ' Copy visible rows + header
+    ' Capture visible rows (header + filtered)
     '-----------------------------
-    wsMain.Range("A1:Z" & wsMain.Cells(wsMain.Rows.Count, "A").End(xlUp).Row).SpecialCells(xlCellTypeVisible).Copy
+    On Error Resume Next
+    Set visRange = rngData.SpecialCells(xlCellTypeVisible)
+    On Error GoTo 0
+
+    If visRange Is Nothing Then
+        MsgBox "No rows met the criteria.", vbInformation
+        GoTo CleanupFilter
+    End If
 
     '-----------------------------
-    ' Create output sheet
+    ' Create / recreate output sheet
     '-----------------------------
     newSheetName = "Filtered_Result"
     On Error Resume Next
@@ -96,31 +119,37 @@ Sub Extract_Matched_and_Blanks()
     Set wsOut = wbMain.Sheets.Add
     wsOut.Name = newSheetName
 
-    wsOut.Range("A1").PasteSpecial xlPasteValues
-    wsOut.Range("A1").PasteSpecial xlPasteFormats
+    '-----------------------------
+    ' Copy visible rows to new sheet (no PasteSpecial)
+    '-----------------------------
+    visRange.Copy Destination:=wsOut.Range("A1")
 
     '-----------------------------
-    ' Convert to table
+    ' Convert copied data to Table
     '-----------------------------
     Set tbl = wsOut.ListObjects.Add( _
         SourceType:=xlSrcRange, _
         Source:=wsOut.Range("A1").CurrentRegion, _
         XlListObjectHasHeaders:=xlYes)
-
     tbl.Name = "FilteredTable"
 
-    '-----------------------------
-    ' Cleanup
-    '-----------------------------
+CleanupFilter:
+    ' Remove filter & helper column
+    On Error Resume Next
     wsMain.AutoFilterMode = False
-    wsMain.Columns("Z").ClearContents
+    wsMain.Columns("U").ClearContents
+    On Error GoTo 0
 
-    wbMain.Save
-    wbLookup.Close SaveChanges:=False
+    ' Save and close files
+    On Error Resume Next
+    If Not wbMain Is Nothing Then wbMain.Save
+    If Not wbLookup Is Nothing Then wbLookup.Close SaveChanges:=False
+    On Error GoTo 0
 
+CleanupExit:
     Application.ScreenUpdating = True
     Application.DisplayAlerts = True
 
-    MsgBox "Process completed successfully.", vbInformation
+    MsgBox "Process completed.", vbInformation
 
 End Sub
