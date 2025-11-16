@@ -1,170 +1,126 @@
-Option Explicit
+Sub Extract_Matched_and_Blanks()
 
-Sub Populate_Domicile_CoR_From_Generic()
-    Dim mainFilePath As Variant
-    Dim wbMain As Workbook
-    Dim wbGeneric As Workbook
-    Dim wsFinal As Worksheet
-    Dim wsGeneric As Worksheet
-    Dim folderPath As String
-    Dim lookupRange As Range
-    Dim lastRowMain As Long
-    Dim lastRowGen As Long
-    
-    Dim COL_G As Long
-    Dim COL_I As Long
-    Dim colKey1 As Long, colDom1 As Long, colCor1 As Long
-    Dim colKey2 As Long, colDom2 As Long, colCor2 As Long
-    
-    Dim i As Long
-    Dim keyVal As Variant
-    Dim res As Variant
-    
-    On Error GoTo ErrHandler
-    
-    '--- select the main XLSX file
-    mainFilePath = Application.GetOpenFilename( _
-                    FileFilter:="Excel Files (*.xlsx), *.xlsx", _
-                    Title:="Select the main Final List workbook")
-    If mainFilePath = False Then
-        MsgBox "No file selected. Macro cancelled.", vbInformation
-        Exit Sub
-    End If
+    Dim wbMain As Workbook           ' File you select
+    Dim wbLookup As Workbook         ' Hardcoded file
+    Dim wsMain As Worksheet
+    Dim wsLookup As Worksheet
+    Dim wsOut As Worksheet
+    Dim fDialog As FileDialog
+    Dim lookupPath As String
+    Dim lastRow As Long
+    Dim critRange As Range
+    Dim rngA As Range
+    Dim newSheetName As String
+    Dim tbl As ListObject
     
     Application.ScreenUpdating = False
-    Application.EnableEvents = False
-    
-    '--- open main workbook
-    Set wbMain = Workbooks.Open(CStr(mainFilePath))
-    folderPath = wbMain.Path & Application.PathSeparator
-    
-    '--- open Generic workbook (hardcoded name in same folder)
-    '   Change "Generic.xlsx" here if the actual file name is different
-    Set wbGeneric = Workbooks.Open(folderPath & "Generic.xlsx")
-    
-    '--- get sheets
-    On Error Resume Next
-    Set wsFinal = wbMain.Worksheets("Final List")
-    On Error GoTo ErrHandler
-    
-    If wsFinal Is Nothing Then
-        MsgBox "'Final List' sheet not found in main workbook.", vbCritical
-        GoTo Cleanup
-    End If
-    
-    'Use the first sheet in Generic.xlsx (change if you have a specific sheet)
-    Set wsGeneric = wbGeneric.Worksheets(1)
-    
-    '--- define lookup range in Generic: columns A:H
-    lastRowGen = wsGeneric.Cells(wsGeneric.Rows.Count, "A").End(xlUp).Row
-    If lastRowGen < 2 Then
-        MsgBox "No data found in column A of Generic file.", vbCritical
-        GoTo Cleanup
-    End If
-    Set lookupRange = wsGeneric.Range("A1:H" & lastRowGen)
-    
-    '--- determine last row in Final List
-    lastRowMain = wsFinal.Cells(wsFinal.Rows.Count, "A").End(xlUp).Row
-    If lastRowMain < 2 Then
-        MsgBox "No data rows found in 'Final List' sheet.", vbCritical
-        GoTo Cleanup
-    End If
-    
-    '--- base column indexes (before inserting)
-    COL_G = 7          'Column G
-    COL_I = 9          'Column I
-    
-    With wsFinal
-        '========================================================
-        ' 1) Insert 2 columns after original Column G
-        '========================================================
-        .Columns(COL_G + 1).Resize(, 2).Insert Shift:=xlToRight
-        
-        colKey1 = COL_G                     'key in original G
-        colDom1 = COL_G + 1                 'new column after G
-        colCor1 = COL_G + 2                 'next new column
-        
-        .Cells(1, colDom1).Value = "Domicile"
-        .Cells(1, colCor1).Value = "CoR"
-        
-        '========================================================
-        ' 2) Insert 2 columns after original Column I
-        '    (original I has shifted by 2 columns because of insert above)
-        '========================================================
-        colKey2 = COL_I + 2                 'original I now at COL_I + 2
-        
-        .Columns(colKey2 + 1).Resize(, 2).Insert Shift:=xlToRight
-        
-        colDom2 = colKey2 + 1
-        colCor2 = colKey2 + 2
-        
-        .Cells(1, colDom2).Value = "Domicile"
-        .Cells(1, colCor2).Value = "CoR"
-    End With
-    
-    '--- fill values row by row using VLOOKUP logic
-    For i = 2 To lastRowMain
-        '-----------------------
-        ' Lookups based on Column G key (colKey1)
-        '-----------------------
-        keyVal = wsFinal.Cells(i, colKey1).Value
-        If Not IsEmpty(keyVal) Then
-            ' Domicile from Generic column H (8th column in lookup range)
-            res = Application.VLookup(keyVal, lookupRange, 8, False)
-            If Not IsError(res) Then
-                wsFinal.Cells(i, colDom1).Value = res
-            Else
-                wsFinal.Cells(i, colDom1).Value = ""
-            End If
-            
-            ' CoR from Generic column G (7th column in lookup range)
-            res = Application.VLookup(keyVal, lookupRange, 7, False)
-            If Not IsError(res) Then
-                wsFinal.Cells(i, colCor1).Value = res
-            Else
-                wsFinal.Cells(i, colCor1).Value = ""
-            End If
-        Else
-            wsFinal.Cells(i, colDom1).Value = ""
-            wsFinal.Cells(i, colCor1).Value = ""
+    Application.DisplayAlerts = False
+
+    '----------------------------------------------------------
+    ' UPDATE THIS PATH FOR THE LOOKUP FILE
+    '----------------------------------------------------------
+    lookupPath = "D:\YourFolder\LookupFile.xlsx"
+    '----------------------------------------------------------
+
+    '-----------------------------
+    ' Select MAIN file
+    '-----------------------------
+    Set fDialog = Application.FileDialog(msoFileDialogFilePicker)
+    With fDialog
+        .Title = "Select the MAIN Excel File"
+        .AllowMultiSelect = False
+        If .Show <> -1 Then
+            MsgBox "No file selected.", vbExclamation
+            Exit Sub
         End If
-        
-        '-----------------------
-        ' Lookups based on Column I key (colKey2)
-        '-----------------------
-        keyVal = wsFinal.Cells(i, colKey2).Value
-        If Not IsEmpty(keyVal) Then
-            ' Domicile from Generic column H
-            res = Application.VLookup(keyVal, lookupRange, 8, False)
-            If Not IsError(res) Then
-                wsFinal.Cells(i, colDom2).Value = res
-            Else
-                wsFinal.Cells(i, colDom2).Value = ""
-            End If
-            
-            ' CoR from Generic column G
-            res = Application.VLookup(keyVal, lookupRange, 7, False)
-            If Not IsError(res) Then
-                wsFinal.Cells(i, colCor2).Value = res
-            Else
-                wsFinal.Cells(i, colCor2).Value = ""
-            End If
+    End With
+
+    Set wbMain = Workbooks.Open(fDialog.SelectedItems(1))
+    Set wbLookup = Workbooks.Open(lookupPath)
+
+    Set wsMain = wbMain.Sheets("Final List")
+    Set wsLookup = wbLookup.Sheets(1)         ' First sheet of lookup file
+    
+    ' Lookup criteria = column A of second file
+    lastRow = wsLookup.Cells(wsLookup.Rows.Count, "A").End(xlDown).Row
+    Set rngA = wsLookup.Range("A1:A" & lastRow)
+
+    '-----------------------------
+    ' Add a helper column for OR match
+    '-----------------------------
+    wsMain.Columns("Z").ClearContents
+    wsMain.Range("Z1").Value = "MatchCheck"
+
+    Dim i As Long, vI As Variant, vM As Variant
+    For i = 2 To wsMain.Cells(wsMain.Rows.Count, "I").End(xlUp).Row
+        vI = wsMain.Cells(i, "I").Value
+        vM = wsMain.Cells(i, "M").Value
+
+        If Application.WorksheetFunction.CountIf(rngA, vI) > 0 _
+        Or Application.WorksheetFunction.CountIf(rngA, vM) > 0 Then
+            wsMain.Cells(i, "Z").Value = "MATCH"
         Else
-            wsFinal.Cells(i, colDom2).Value = ""
-            wsFinal.Cells(i, colCor2).Value = ""
+            wsMain.Cells(i, "Z").Value = ""
         End If
     Next i
-    
-    '--- save the main workbook
-    wbMain.Save
-    
-Cleanup:
+
+    '-----------------------------
+    ' Apply filter:
+    ' (1) Z = MATCH     OR
+    ' (2) Column I blank OR Column N blank
+    '-----------------------------
+    wsMain.AutoFilterMode = False
+
+    wsMain.Range("A1:Z" & wsMain.Cells(wsMain.Rows.Count, "A").End(xlUp).Row).AutoFilter _
+        Field:=26, Criteria1:="MATCH"    ' Z column
+
+    wsMain.Range("A1:Z" & wsMain.Cells(wsMain.Rows.Count, "A").End(xlUp).Row).AutoFilter _
+        Field:=9, Criteria1:="="         ' Col I blank
+
+    wsMain.Range("A1:Z" & wsMain.Cells(wsMain.Rows.Count, "A").End(xlUp).Row).AutoFilter _
+        Field:=14, Criteria1:="="        ' Col N blank
+
+    '-----------------------------
+    ' Copy visible rows + header
+    '-----------------------------
+    wsMain.Range("A1:Z" & wsMain.Cells(wsMain.Rows.Count, "A").End(xlUp).Row).SpecialCells(xlCellTypeVisible).Copy
+
+    '-----------------------------
+    ' Create output sheet
+    '-----------------------------
+    newSheetName = "Filtered_Result"
     On Error Resume Next
+    wbMain.Sheets(newSheetName).Delete
+    On Error GoTo 0
+
+    Set wsOut = wbMain.Sheets.Add
+    wsOut.Name = newSheetName
+
+    wsOut.Range("A1").PasteSpecial xlPasteValues
+    wsOut.Range("A1").PasteSpecial xlPasteFormats
+
+    '-----------------------------
+    ' Convert to table
+    '-----------------------------
+    Set tbl = wsOut.ListObjects.Add( _
+        SourceType:=xlSrcRange, _
+        Source:=wsOut.Range("A1").CurrentRegion, _
+        XlListObjectHasHeaders:=xlYes)
+
+    tbl.Name = "FilteredTable"
+
+    '-----------------------------
+    ' Cleanup
+    '-----------------------------
+    wsMain.AutoFilterMode = False
+    wsMain.Columns("Z").ClearContents
+
+    wbMain.Save
+    wbLookup.Close SaveChanges:=False
+
     Application.ScreenUpdating = True
-    Application.EnableEvents = True
-    Exit Sub
-    
-ErrHandler:
-    MsgBox "Error " & Err.Number & ": " & Err.Description, vbCritical, "Populate_Domicile_CoR_From_Generic"
-    Resume Cleanup
+    Application.DisplayAlerts = True
+
+    MsgBox "Process completed successfully.", vbInformation
+
 End Sub
