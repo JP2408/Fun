@@ -1,155 +1,45 @@
-Sub Extract_Matched_And_Blanks_ColI_ColM()
+'===========================================================
+' REMOVE ROWS FROM FINAL LIST WHERE COL O MATCHES TAX HAVEN COL B
+'===========================================================
+Dim wbTax As Workbook
+Dim wsTax As Worksheet
+Dim lastRowTax As Long
+Dim rngTax As Range
+Dim dictTax As Object
+Dim valO As Variant
+Dim r As Long
 
-    Dim wbMain As Workbook           ' File you select
-    Dim wbLookup As Workbook         ' Hardcoded file
-    Dim wsMain As Worksheet
-    Dim wsLookup As Worksheet
-    Dim wsOut As Worksheet
-    Dim fDialog As FileDialog
-    Dim lookupPath As String
-    Dim lastRowMain As Long, lastRowLookup As Long
-    Dim rngLookup As Range, rngData As Range
-    Dim newSheetName As String
-    Dim tbl As ListObject
-    Dim visRange As Range
-    Dim i As Long
-    Dim vI As Variant, vM As Variant
+'---------------------------------------
+' UPDATE THIS PATH TO YOUR TAX HAVEN FILE
+'---------------------------------------
+Set wbTax = Workbooks.Open("D:\YourFolder\Tax Haven.xlsx")
+Set wsTax = wbTax.Sheets(1)
 
-    Application.ScreenUpdating = False
-    Application.DisplayAlerts = False
+' Build dictionary of disallowed Tax Haven values (Column B)
+Set dictTax = CreateObject("Scripting.Dictionary")
 
-    '----------------------------------------------------------
-    ' UPDATE THIS PATH TO YOUR 2ND (HARDCODED) FILE
-    '----------------------------------------------------------
-    lookupPath = "D:\YourFolder\LookupFile.xlsx"
-    '----------------------------------------------------------
+lastRowTax = wsTax.Cells(wsTax.Rows.Count, "B").End(xlUp).Row
+Set rngTax = wsTax.Range("B2:B" & lastRowTax)
 
-    '-----------------------------
-    ' Select MAIN file (1st file)
-    '-----------------------------
-    Set fDialog = Application.FileDialog(msoFileDialogFilePicker)
-    With fDialog
-        .Title = "Select the MAIN Excel File"
-        .AllowMultiSelect = False
-        If .Show <> -1 Then
-            MsgBox "No file selected.", vbExclamation
-            GoTo CleanupExit
+For Each cell In rngTax
+    If Len(cell.Value) > 0 Then
+        dictTax(cell.Value) = 1
+    End If
+Next cell
+
+' Delete matching rows in Final List
+With wsMain
+    For r = .Cells(.Rows.Count, "O").End(xlUp).Row To 2 Step 1 * -1
+        valO = .Cells(r, "O").Value
+        
+        If Len(valO) > 0 Then
+            If dictTax.Exists(valO) Then
+                .Rows(r).Delete
+            End If
         End If
-    End With
+    Next r
+End With
 
-    Set wbMain = Workbooks.Open(fDialog.SelectedItems(1))
-    Set wbLookup = Workbooks.Open(lookupPath)
-
-    ' Main sheet = "Final List"
-    On Error Resume Next
-    Set wsMain = wbMain.Sheets("Final List")
-    On Error GoTo 0
-    If wsMain Is Nothing Then
-        MsgBox "'Final List' sheet not found in main file.", vbCritical
-        GoTo CleanupExit
-    End If
-
-    ' Lookup sheet = first sheet in 2nd file (adjust if needed)
-    Set wsLookup = wbLookup.Sheets(1)
-
-    ' Lookup range = Column A of 2nd file (ignoring header in A1)
-    lastRowLookup = wsLookup.Cells(wsLookup.Rows.Count, "A").End(xlUp).Row
-    If lastRowLookup < 2 Then
-        MsgBox "No lookup data found in column A of 2nd file.", vbExclamation
-        GoTo CleanupExit
-    End If
-    Set rngLookup = wsLookup.Range("A2:A" & lastRowLookup)
-
-    '-----------------------------
-    ' Helper column U in main file
-    '-----------------------------
-    wsMain.Columns("U").ClearContents
-    wsMain.Range("U1").Value = "IncludeRow"
-
-    lastRowMain = wsMain.Cells(wsMain.Rows.Count, "A").End(xlUp).Row
-    If lastRowMain < 2 Then
-        MsgBox "No data rows found in 'Final List' sheet.", vbExclamation
-        GoTo CleanupExit
-    End If
-
-    ' Flag rows to keep based on:
-    '  (I in lookup) OR (M in lookup) OR (I blank) OR (M blank)
-    For i = 2 To lastRowMain
-        vI = wsMain.Cells(i, "I").Value
-        vM = wsMain.Cells(i, "M").Value
-
-        If _
-            (Len(vI) = 0) Or _
-            (Len(vM) = 0) Or _
-            (Application.CountIf(rngLookup, vI) > 0) Or _
-            (Application.CountIf(rngLookup, vM) > 0) _
-        Then
-            wsMain.Cells(i, "U").Value = "Y"
-        End If
-    Next i
-
-    '-----------------------------
-    ' Apply filter on helper column U
-    '-----------------------------
-    wsMain.AutoFilterMode = False
-    Set rngData = wsMain.Range("A1:U" & lastRowMain)
-
-    rngData.AutoFilter Field:=21, Criteria1:="Y"   ' Column U = IncludeRow
-
-    '-----------------------------
-    ' Capture visible rows (header + filtered)
-    '-----------------------------
-    On Error Resume Next
-    Set visRange = rngData.SpecialCells(xlCellTypeVisible)
-    On Error GoTo 0
-
-    If visRange Is Nothing Then
-        MsgBox "No rows met the criteria.", vbInformation
-        GoTo CleanupFilter
-    End If
-
-    '-----------------------------
-    ' Create / recreate output sheet
-    '-----------------------------
-    newSheetName = "Filtered_Result"
-    On Error Resume Next
-    wbMain.Sheets(newSheetName).Delete
-    On Error GoTo 0
-
-    Set wsOut = wbMain.Sheets.Add
-    wsOut.Name = newSheetName
-
-    '-----------------------------
-    ' Copy visible rows to new sheet (no PasteSpecial)
-    '-----------------------------
-    visRange.Copy Destination:=wsOut.Range("A1")
-
-    '-----------------------------
-    ' Convert copied data to Table
-    '-----------------------------
-    Set tbl = wsOut.ListObjects.Add( _
-        SourceType:=xlSrcRange, _
-        Source:=wsOut.Range("A1").CurrentRegion, _
-        XlListObjectHasHeaders:=xlYes)
-    tbl.Name = "FilteredTable"
-
-CleanupFilter:
-    ' Remove filter & helper column
-    On Error Resume Next
-    wsMain.AutoFilterMode = False
-    wsMain.Columns("U").ClearContents
-    On Error GoTo 0
-
-    ' Save and close files
-    On Error Resume Next
-    If Not wbMain Is Nothing Then wbMain.Save
-    If Not wbLookup Is Nothing Then wbLookup.Close SaveChanges:=False
-    On Error GoTo 0
-
-CleanupExit:
-    Application.ScreenUpdating = True
-    Application.DisplayAlerts = True
-
-    MsgBox "Process completed.", vbInformation
-
-End Sub
+' Close Tax Haven file without saving
+wbTax.Close SaveChanges:=False
+'===========================================================
