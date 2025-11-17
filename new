@@ -1,45 +1,263 @@
-'===========================================================
-' REMOVE ROWS FROM FINAL LIST WHERE COL O MATCHES TAX HAVEN COL B
-'===========================================================
-Dim wbTax As Workbook
-Dim wsTax As Worksheet
-Dim lastRowTax As Long
-Dim rngTax As Range
-Dim dictTax As Object
-Dim valO As Variant
-Dim r As Long
+Option Explicit
 
-'---------------------------------------
-' UPDATE THIS PATH TO YOUR TAX HAVEN FILE
-'---------------------------------------
-Set wbTax = Workbooks.Open("D:\YourFolder\Tax Haven.xlsx")
-Set wsTax = wbTax.Sheets(1)
-
-' Build dictionary of disallowed Tax Haven values (Column B)
-Set dictTax = CreateObject("Scripting.Dictionary")
-
-lastRowTax = wsTax.Cells(wsTax.Rows.Count, "B").End(xlUp).Row
-Set rngTax = wsTax.Range("B2:B" & lastRowTax)
-
-For Each cell In rngTax
-    If Len(cell.Value) > 0 Then
-        dictTax(cell.Value) = 1
-    End If
-Next cell
-
-' Delete matching rows in Final List
-With wsMain
-    For r = .Cells(.Rows.Count, "O").End(xlUp).Row To 2 Step 1 * -1
-        valO = .Cells(r, "O").Value
+Sub Process_Files_With_Ref()
+    Dim wbData As Workbook          ' First file: the one you select (Final List is here)
+    Dim wbRef As Workbook           ' Second file: hardcoded path (reference data)
+    Dim wsFinal As Worksheet
+    Dim wsRef As Worksheet
+    Dim wsOut As Worksheet
+    
+    Dim fd As FileDialog
+    Dim dataFilePath As String
+    Dim refFilePath As String
+    Dim refSheetName As String
+    
+    Dim lastRow As Long, lastCol As Long
+    Dim lastRefA As Long, lastRefB As Long
+    Dim helperCol As Long
+    
+    Dim dictA As Object             ' For matches against Column A of ref file
+    Dim dictB As Object             ' For matches against Column B of ref file
+    Dim arrA As Variant, arrB As Variant
+    Dim r As Long
+    Dim vI As Variant, vM As Variant, vG As Variant, vK As Variant
+    Dim vO As Variant
+    
+    ' >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    ' CHANGE THESE TWO AS PER YOUR SYSTEM
+    ' Hardcoded reference file path (2nd file)
+    refFilePath = "C:\Your\Folder\ReferenceFile.xlsx"
+    ' Sheet in the reference file where Column A & B reside
+    refSheetName = "Sheet1"
+    ' <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    
+    On Error GoTo ErrHandler
+    
+    '----------------------------------------------------------------------
+    ' 1. Let user pick the first file (the main file with 'Final List')
+    '----------------------------------------------------------------------
+    Set fd = Application.FileDialog(msoFileDialogFilePicker)
+    With fd
+        .Title = "Select the main data file (with 'Final List' sheet)"
+        .Filters.Clear
+        .Filters.Add "Excel Files", "*.xls; *.xlsx; *.xlsm"
+        .AllowMultiSelect = False
         
-        If Len(valO) > 0 Then
-            If dictTax.Exists(valO) Then
-                .Rows(r).Delete
-            End If
+        If .Show <> -1 Then
+            MsgBox "No file selected. Exiting.", vbInformation
+            GoTo CleanExit
         End If
-    Next r
-End With
-
-' Close Tax Haven file without saving
-wbTax.Close SaveChanges:=False
-'===========================================================
+        dataFilePath = .SelectedItems(1)
+    End With
+    
+    Set wbData = Workbooks.Open(Filename:=dataFilePath)
+    
+    '----------------------------------------------------------------------
+    ' 2. Open the hardcoded reference file (2nd file)
+    '----------------------------------------------------------------------
+    Set wbRef = Workbooks.Open(Filename:=refFilePath)
+    
+    On Error Resume Next
+    Set wsRef = wbRef.Worksheets(refSheetName)
+    On Error GoTo ErrHandler
+    
+    If wsRef Is Nothing Then
+        MsgBox "Reference sheet '" & refSheetName & "' not found in " & wbRef.Name, vbCritical
+        GoTo CleanExit
+    End If
+    
+    '----------------------------------------------------------------------
+    ' 3. Load lookup values from reference file:
+    '    - Column A into dictA (for matching against Column I and M)
+    '    - Column B into dictB (for later deletion using Column O)
+    '----------------------------------------------------------------------
+    Set dictA = CreateObject("Scripting.Dictionary")
+    Set dictB = CreateObject("Scripting.Dictionary")
+    
+    ' Column A
+    lastRefA = wsRef.Cells(wsRef.Rows.Count, "A").End(xlUp).Row
+    If lastRefA >= 2 Then
+        arrA = wsRef.Range("A2:A" & lastRefA).Value
+        For r = 1 To UBound(arrA, 1)
+            If Len(Trim(arrA(r, 1))) > 0 Then
+                If Not dictA.Exists(CStr(arrA(r, 1))) Then
+                    dictA.Add CStr(arrA(r, 1)), True
+                End If
+            End If
+        Next r
+    End If
+    
+    ' Column B
+    lastRefB = wsRef.Cells(wsRef.Rows.Count, "B").End(xlUp).Row
+    If lastRefB >= 2 Then
+        arrB = wsRef.Range("B2:B" & lastRefB).Value
+        For r = 1 To UBound(arrB, 1)
+            If Len(Trim(arrB(r, 1))) > 0 Then
+                If Not dictB.Exists(CStr(arrB(r, 1))) Then
+                    dictB.Add CStr(arrB(r, 1)), True
+                End If
+            End If
+        Next r
+    End If
+    
+    '----------------------------------------------------------------------
+    ' 4. Work on 'Final List' sheet in the first (data) workbook
+    '----------------------------------------------------------------------
+    On Error Resume Next
+    Set wsFinal = wbData.Worksheets("Final List")
+    On Error GoTo ErrHandler
+    
+    If wsFinal Is Nothing Then
+        MsgBox "'Final List' sheet not found in " & wbData.Name, vbCritical
+        GoTo CleanExit
+    End If
+    
+    With wsFinal
+        ' Determine last row & last column of data
+        lastRow = .Cells(.Rows.Count, "A").End(xlUp).Row
+        If lastRow < 2 Then
+            MsgBox "'Final List' has no data rows.", vbInformation
+            GoTo CleanExit
+        End If
+        
+        lastCol = .Cells(1, .Columns.Count).End(xlToLeft).Column
+        
+        ' Use a helper column to mark rows to keep
+        helperCol = lastCol + 1
+        .Cells(1, helperCol).Value = "ToKeep"
+        
+        ' Loop through data rows and set ToKeep = "Y"/"N"
+        For r = 2 To lastRow
+            vI = .Cells(r, "I").Value      ' Column I
+            vM = .Cells(r, "M").Value      ' Column M
+            vG = .Cells(r, "G").Value      ' Column G
+            vK = .Cells(r, "K").Value      ' Column K
+            
+            Dim keepRow As Boolean
+            keepRow = False
+            
+            ' Condition 1: value in Column I matches Column A of 2nd file
+            If Len(Trim(vI)) > 0 Then
+                If dictA.Exists(CStr(vI)) Then keepRow = True
+            End If
+            
+            ' Condition 2: value in Column M matches Column A of 2nd file
+            If Not keepRow And Len(Trim(vM)) > 0 Then
+                If dictA.Exists(CStr(vM)) Then keepRow = True
+            End If
+            
+            ' Condition 3: Column I is blank AND Column G is NOT blank
+            If Not keepRow Then
+                If Len(Trim(vI)) = 0 And Len(Trim(vG)) > 0 Then
+                    keepRow = True
+                End If
+            End If
+            
+            ' Condition 4: Column M is blank AND Column K is NOT blank
+            If Not keepRow Then
+                If Len(Trim(vM)) = 0 And Len(Trim(vK)) > 0 Then
+                    keepRow = True
+                End If
+            End If
+            
+            If keepRow Then
+                .Cells(r, helperCol).Value = "Y"
+            Else
+                .Cells(r, helperCol).Value = "N"
+            End If
+        Next r
+        
+        '------------------------------------------------------------------
+        ' 5. Filter on helper column and copy visible rows (including header)
+        '    to a NEW sheet in the first workbook, as a table.
+        '------------------------------------------------------------------
+        ' Clear any existing AutoFilter
+        If .AutoFilterMode Then .AutoFilterMode = False
+        
+        ' Apply filter on helper column = "Y"
+        .Range(.Cells(1, 1), .Cells(lastRow, helperCol)).AutoFilter Field:=helperCol, Criteria1:="Y"
+        
+        ' Delete existing output sheet (if present)
+        On Error Resume Next
+        Set wsOut = wbData.Worksheets("Filtered_List")
+        If Not wsOut Is Nothing Then
+            Application.DisplayAlerts = False
+            wsOut.Delete
+            Application.DisplayAlerts = True
+        End If
+        On Error GoTo ErrHandler
+        
+        ' Create new sheet
+        Set wsOut = wbData.Worksheets.Add(After:=wsFinal)
+        wsOut.Name = "Filtered_List"
+        
+        ' Copy visible cells (header + filtered rows) and paste as values
+        .UsedRange.SpecialCells(xlCellTypeVisible).Copy
+        With wsOut.Range("A1")
+            .PasteSpecial xlPasteValues
+            .PasteSpecial xlPasteFormats
+        End With
+        Application.CutCopyMode = False
+        
+        ' Remove filter and helper column from Final List
+        If .AutoFilterMode Then .AutoFilterMode = False
+        .Columns(helperCol).EntireColumn.Delete
+    End With
+    
+    '----------------------------------------------------------------------
+    ' 6. Convert the data in the new sheet into a Table
+    '----------------------------------------------------------------------
+    Dim lo As ListObject
+    With wsOut
+        lastRow = .Cells(.Rows.Count, "A").End(xlUp).Row
+        If lastRow < 2 Then
+            ' Only header or empty – nothing much to do
+            GoTo SkipDeleteStep
+        End If
+        
+        lastCol = .Cells(1, .Columns.Count).End(xlToLeft).Column
+        
+        Set lo = .ListObjects.Add( _
+                    SourceType:=xlSrcRange, _
+                    Source:=.Range(.Cells(1, 1), .Cells(lastRow, lastCol)), _
+                    XlListObjectHasHeaders:=xlYes)
+        lo.Name = "FilteredTable"
+    End With
+    
+    '----------------------------------------------------------------------
+    ' 7. In the resulting table in new sheet, match values in Column O
+    '    against Column B of reference file and DELETE matching rows
+    '----------------------------------------------------------------------
+SkipDeleteStep:
+    With wsOut
+        lastRow = .Cells(.Rows.Count, "A").End(xlUp).Row
+        If lastRow >= 2 Then
+            For r = lastRow To 2 Step -1   ' bottom-up delete
+                vO = .Cells(r, "O").Value  ' Column O in new sheet
+                If Len(Trim(vO)) > 0 Then
+                    If dictB.Exists(CStr(vO)) Then
+                        .Rows(r).Delete
+                    End If
+                End If
+            Next r
+        End If
+    End With
+    
+    ' Table auto-resizes when rows deleted, so no extra steps needed there.
+    
+CleanExit:
+    On Error Resume Next
+    If Not wbData Is Nothing Then wbData.Close SaveChanges:=True
+    If Not wbRef Is Nothing Then wbRef.Close SaveChanges:=False
+    
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+    
+ErrHandler:
+    MsgBox "Error " & Err.Number & ": " & Err.Description, vbCritical, "Process_Files_With_Ref"
+    Resume CleanExit
+End Sub
